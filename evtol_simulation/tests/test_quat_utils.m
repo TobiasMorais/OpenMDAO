@@ -25,12 +25,12 @@ tr = test_helpers('assert_near', tr, R_id, eye(3), 1e-12, 'Q3 R(identity) = I_3'
 R = quat_utils('toR', q);
 tr = test_helpers('assert_near', tr, R'*R, eye(3), 1e-10, 'Q4 R^T R = I');
 
-% Q5: Euler roundtrip (random sample)
+% Q5: Euler roundtrip (random sample, theta restricted to avoid gimbal lock)
 rng(42);
 errs = zeros(20,1);
 for k = 1:20
     phi = -pi + 2*pi*rand();
-    th  = -pi/2 + 0.95*pi*rand() - 0.45*pi;   % avoid gimbal lock |th|>=85deg
+    th  = deg2rad(-85 + 170*rand());     % theta in (-85, +85) deg, away from singularity
     psi = -pi + 2*pi*rand();
     qq  = quat_utils('fromEuler', phi, th, psi);
     eu  = quat_utils('toEuler', qq);

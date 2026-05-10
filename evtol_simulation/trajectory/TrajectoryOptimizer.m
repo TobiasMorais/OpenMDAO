@@ -29,10 +29,25 @@ classdef TrajectoryOptimizer < handle
         function obj = TrajectoryOptimizer(waypoints, ac_cfg)
             obj.waypoints = waypoints;
             obj.ac_cfg = ac_cfg;
-            % Initial uniform time allocation
-            N_seg = size(waypoints, 1) - 1;
+
+            % Time allocation respecting per-rotor thrust saturation envelope.
+            %
+            % For 8th-order rest-to-rest min-snap polynomial of length d over T,
+            % peak acceleration is approximately a_peak ~ 30 d / T^2 (kinematic
+            % bound from coefficient analysis).
+            % Required thrust per rotor: T_i = m * sqrt(a_peak^2 + g^2) / N_rotors
+            % Constrained: T_i <= alpha * T_max  (with alpha=0.7 safety factor).
+            %
+            % Solving for T:
+            %   T_min = sqrt( 30 * d / a_max_design ),  where a_max_design from sat:
+            %   a_max_design = sqrt( (alpha * N_rotors * T_max / m)^2 - g^2 )
             d_seg = vecnorm(diff(waypoints(:,1:3)),2,2);
-            t_seg = max(2.0, d_seg / 25.0);   % ~25 m/s nominal cruise
+            alpha = 0.7;
+            T_per_max = alpha * ac_cfg.rotor.thrust_max;
+            a_envelope = (ac_cfg.n_rotors * T_per_max) / ac_cfg.mass;
+            a_max_design = sqrt(max(a_envelope^2 - 9.80665^2, 0.5));
+            t_seg = max(3.0, sqrt(30 * d_seg / a_max_design));
+
             obj.baseline = DifferentialFlatness(waypoints, t_seg);
         end
 

@@ -8,11 +8,19 @@ function ctrl = controller_config()
 %% ----- Inner attitude loop -----
 ctrl.inner.type = 'SO3';   % 'SO3' | 'INDI'  (toggleable in main.m)
 
-% Geometric SO(3) gains  (Lee, Leok, McClamroch 2010)
-ctrl.so3.kR    = diag([180, 220, 90]);   % attitude error gain (per axis)
-ctrl.so3.kOm   = diag([35, 45, 22]);     % angular rate error gain
-ctrl.so3.kI    = diag([2.0, 2.0, 1.0]);  % integral gain on so(3)
-ctrl.so3.I_max = deg2rad(15.0);          % anti-windup saturation
+% Geometric SO(3) gains scaled by tailsitter inertia
+% Tuning rule (Lee-Leok-McClamroch 2010 closed-loop natural frequency):
+%   kR    ~ J * omega_n^2     omega_n: desired bandwidth
+%   kOm   ~ 2 * zeta * omega_n * J
+% Tailsitter J = diag([2200, 3800, 5500]) kg*m^2 (with J_xz cross term).
+% Selection: omega_n = 5 rad/s, zeta = 0.7 (well-damped, stays inside 4*4500*5 N*m envelope).
+omega_n  = 5.0;
+zeta_att = 0.7;
+J_diag = [2200; 3800; 5500];                    % must match aircraft_config J diagonal
+ctrl.so3.kR    = diag(J_diag * omega_n^2);              % [55000, 95000, 137500]
+ctrl.so3.kOm   = diag(2 * zeta_att * omega_n * J_diag); % [15400, 26600, 38500]
+ctrl.so3.kI    = diag(0.05 * J_diag);                   % integral matched to inertia
+ctrl.so3.I_max = deg2rad(15.0);                          % anti-windup saturation
 
 % INDI parameters (Smeur 2016, Mancinelli 2024)
 ctrl.indi.G       = [];      % effectiveness Jacobian (filled at init from aircraft model)
