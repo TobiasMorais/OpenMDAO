@@ -142,42 +142,60 @@ classdef MissionTrajectory < handle
     methods (Access = private)
         function ph = compile_phase(obj, ph)
             % Pre-compute polynomial coefficients for non-trivial phases.
-            % 8 coefficients (8th-order polynomial) per dimension to satisfy
-            % 8 boundary conditions: p, v, a, j at both ends.
+            %
+            % NUMERICAL STABILITY: solve in normalized time u = tau/T (range [0,1]).
+            % This avoids the catastrophic ill-conditioning that occurs when T is
+            % large (e.g., T=115s gives T^7=3.4e14, condition number ~1e16, useless
+            % coefficients). With u-normalization, A has only entries in {0..210},
+            % condition number < 100.
+            %
+            % Boundary conditions in u: derivatives scale by T:
+            %   dp/du = T * (dp/dtau)
+            %   d^2p/du^2 = T^2 * (d^2p/dtau^2)
+            %   d^3p/du^3 = T^3 * (d^3p/dtau^3)
             switch ph.type
                 case {'rest_to_rest', 'rest_to_cruise', 'cruise_to_rest'}
                     T = ph.duration;
-                    % Vandermonde-like system: rows = BCs at t=0 then t=T
                     A = [1 0 0 0 0 0 0 0;            % p(0)
                          0 1 0 0 0 0 0 0;            % p'(0)
                          0 0 2 0 0 0 0 0;            % p''(0)
                          0 0 0 6 0 0 0 0;            % p'''(0)
-                         1 T T^2 T^3 T^4 T^5 T^6 T^7;
-                         0 1 2*T 3*T^2 4*T^3 5*T^4 6*T^5 7*T^6;
-                         0 0 2 6*T 12*T^2 20*T^3 30*T^4 42*T^5;
-                         0 0 0 6 24*T 60*T^2 120*T^3 210*T^4];
+                         1 1 1 1 1 1 1 1;            % p(1)
+                         0 1 2 3 4 5 6 7;            % p'(1)
+                         0 0 2 6 12 20 30 42;        % p''(1)
+                         0 0 0 6 24 60 120 210];     % p'''(1)
                     coeffs = zeros(3, 8);
                     for d = 1:3
-                        b = [ph.start_pos(d); ph.start_vel(d); ph.start_acc(d); 0;
-                             ph.end_pos(d);   ph.end_vel(d);   ph.end_acc(d);   0];
+                        b = [ph.start_pos(d);
+                             T * ph.start_vel(d);
+                             T^2 * ph.start_acc(d);
+                             0;
+                             ph.end_pos(d);
+                             T * ph.end_vel(d);
+                             T^2 * ph.end_acc(d);
+                             0];
                         coeffs(d, :) = (A \ b)';
                     end
                     ph.coeffs = coeffs;
+                    ph.T_norm = T;
             end
         end
 
         function [p, v, a, j, s] = eval_polynomial(obj, ph, tau)
             tau = max(0, min(tau, ph.duration));
-            T = tau .^ (0:7)';
-            Td = (1:7) .* tau .^ (0:6); Td = [0, Td]';
-            Tdd = (1:6) .* (2:7) .* tau .^ (0:5); Tdd = [0, 0, Tdd]';
-            Tddd = (1:5) .* (2:6) .* (3:7) .* tau .^ (0:4); Tddd = [0, 0, 0, Tddd]';
-            Tdddd = (1:4) .* (2:5) .* (3:6) .* (4:7) .* tau .^ (0:3); Tdddd = [0, 0, 0, 0, Tdddd]';
-            p = (ph.coeffs * T);
-            v = (ph.coeffs * Td);
-            a = (ph.coeffs * Tdd);
-            j = (ph.coeffs * Tddd);
-            s = (ph.coeffs * Tdddd);
+            T = ph.T_norm;
+            u = tau / T;
+            U = u .^ (0:7)';
+            Ud = (1:7) .* u .^ (0:6); Ud = [0, Ud]';
+            Udd = (1:6) .* (2:7) .* u .^ (0:5); Udd = [0, 0, Udd]';
+            Uddd = (1:5) .* (2:6) .* (3:7) .* u .^ (0:4); Uddd = [0, 0, 0, Uddd]';
+            Udddd = (1:4) .* (2:5) .* (3:6) .* (4:7) .* u .^ (0:3); Udddd = [0, 0, 0, 0, Udddd]';
+            % Re-scale derivatives back to physical time tau
+            p = (ph.coeffs * U);
+            v = (ph.coeffs * Ud) / T;
+            a = (ph.coeffs * Udd) / T^2;
+            j = (ph.coeffs * Uddd) / T^3;
+            s = (ph.coeffs * Udddd) / T^4;
         end
 
         function verify_continuity(obj)
