@@ -107,17 +107,20 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
             case 'SO3'
                 Rd = quat_utils('toR', qd);
                 M_cmd = inner.compute(R_BW, w_B, Rd, zeros(3,1), zeros(3,1), ac_cfg.J, t);
-                F_virtual_B = R_BW' * F_cmd_NED;
+                % Body-frame virtual force: only the magnitude along +x_B
+                % (which is what the rotors physically produce). The body is
+                % rotated to align x_B with F_cmd_NED by the SO(3) loop;
+                % giving the allocator off-axis components would force it to
+                % use surfaces/diff-thrust to fight a misalignment that SO(3)
+                % is already correcting -- causes loop instability.
+                F_virtual_B = [norm(F_cmd_NED); 0; 0];
             case 'INDI'
                 u_meas = [prop.Omega_actual.^2 * ac_cfg.rotor.kT; 0; 0; 0];
                 [Du, ~] = inner.compute(q, w_B, qd, zeros(3,1), u_meas, t);
                 M_cmd = ac_cfg.J * (Du(1:3));   % approximate: pretend Du is angular accel demand
-                % Note: in pure INDI Du IS the increment in actuators; the allocator below
-                % handles producing the actual motor commands. To unify with SO3 path we
-                % project to virtual moments via the effectiveness Jacobian.
                 G_att = alloc.attitude_effectiveness();
                 M_cmd = ac_cfg.J * (G_att * Du(1:ac_cfg.n_rotors));
-                F_virtual_B = R_BW' * F_cmd_NED;
+                F_virtual_B = [norm(F_cmd_NED); 0; 0];
         end
 
         % --- Allocation ---
