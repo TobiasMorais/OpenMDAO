@@ -42,8 +42,9 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
     end
     x = aircraft.initial_state(init_mode);
 
-    % Logging buffers
-    N_steps = floor(min(sim_cfg.t_final, traj.total_time()) / sim_cfg.dt) + 1;
+    % Logging buffers — run for t_final regardless of trajectory length.
+    % After traj.total_time() the reference is held at the last waypoint.
+    N_steps = floor(sim_cfg.t_final / sim_cfg.dt) + 1;
     log = init_log(N_steps);
 
     % Outer loop trigger

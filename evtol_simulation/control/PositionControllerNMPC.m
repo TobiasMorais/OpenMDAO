@@ -51,11 +51,11 @@ classdef PositionControllerNMPC < handle
             N  = obj.cfg.nmpc.N;
             dt = obj.cfg.nmpc.dt;
 
-            % --- Disturbance update (slow integrating action on position error) ---
-            % Conservative gain: k_d=0.05 means d_hat reaches 1 m/s^2 of compensation
-            % only after ~20 s of sustained 1 m position offset. Slow, but stable.
+            % --- Disturbance update (integrating action on position error) ---
+            % k_d=0.2 gives ~5 s time constant for steady-state offset compensation
+            % from unmodeled aero drag (slipstream produces ~0.13 m/s^2 in hover).
             err_p = p_ref_traj(:,1) - p;
-            k_d = 0.05;
+            k_d = 0.2;
             obj.d_hat = obj.d_hat + k_d * err_p * (1/obj.cfg.f_outer);
             obj.d_hat = max(-obj.d_max, min(obj.d_max, obj.d_hat));
 
