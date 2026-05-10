@@ -31,10 +31,12 @@ function waypoints = build_mission(scenario)
                   0,    0,   -30,   0];
 
         case 'hover_only'
-            % Pure stationary hover at 30 m altitude — minimal integration test.
+            % Pure stationary hover hold (no climb). Used to test cascade
+            % stability without trajectory tracking dynamics.
+            % Tiny epsilon between waypoints to avoid degenerate polynomial.
             waypoints = [
-                  0,    0,     0,   0;
-                  0,    0,   -30,   0];
+                  0,    0,   -10,   0;
+                  0,    0,   -10.001, 0];
 
         otherwise
             error('Unknown scenario: %s', scenario);

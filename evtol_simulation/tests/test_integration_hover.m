@@ -25,13 +25,15 @@ ac_cfg   = aircraft_config();
 ctrl_cfg = controller_config();
 sim_cfg  = simulation_config();
 
-% Override scenario to hover_only with short duration
+% Override: stationary hover hold at -10 m (no climb, no horizontal motion).
+% This isolates pure cascade stability from trajectory tracking dynamics.
 sim_cfg.t_final = 10.0;
 sim_cfg.wind.dryden.enable = false;          % deterministic for repeatability
 sim_cfg.wind.constant_NED  = [0;0;0];
+sim_cfg.init_mode = 'hover_at_altitude';     % start at -10 m hover
 ctrl_cfg.inner.type = 'SO3';
 
-% Build minimal hover trajectory: stay at -10 m altitude
+% Trajectory: stationary hold at -10 m (matches initial state)
 wp = build_mission('hover_only');
 opt = TrajectoryOptimizer(wp, ac_cfg);
 traj = opt.optimize('method', 'flat');
@@ -49,20 +51,19 @@ if N <= N_skip + 1
 end
 tr = test_helpers('assert', tr, true, 'I0 simulation completed without crash');
 
-% I1: Position drift bounded
-% Note: hover_only ramps to -30m altitude; allow 10 m steady-state drift.
+% I1: Position drift bounded (true hover hold, no trajectory motion)
 pos_err_norm = vecnorm(log.tracking_err, 2, 1);
 max_err = max(pos_err_norm(N_skip:end));
 fprintf('       Max tracking error after t>1s: %.2f m\n', max_err);
-tr = test_helpers('assert', tr, max_err < 50, ...
-    'I1 position drift bounded (<50 m hover, transient allowed)');
+tr = test_helpers('assert', tr, max_err < 5, ...
+    'I1 position drift bounded (<5 m for stationary hover)');
 
-% I2: Pitch stays near 90 deg
+% I2: Pitch stays near 90 deg (tailsitter upright)
 pitch_dev = abs(log.pitch_deg(N_skip:end) - 90);
 max_pitch_dev = max(pitch_dev);
 fprintf('       Max pitch deviation from 90 deg: %.2f deg\n', max_pitch_dev);
-tr = test_helpers('assert', tr, max_pitch_dev < 30, ...
-    'I2 pitch within +/- 30 deg of hover');
+tr = test_helpers('assert', tr, max_pitch_dev < 10, ...
+    'I2 pitch within +/- 10 deg of hover');
 
 % I3: Quaternion norm preserved
 qnorms = vecnorm(log.quat, 2, 1);
@@ -77,11 +78,11 @@ fprintf('       Max motor thrust: %.0f N (limit %.0f)\n', max_T, ac_cfg.rotor.th
 tr = test_helpers('assert', tr, max_T < ac_cfg.rotor.thrust_max + 10, ...
     'I4 motor thrust within saturation envelope');
 
-% I5: Final position within 20 m of last reference
+% I5: Final position close to reference (cascade is convergent)
 final_err = pos_err_norm(end);
 fprintf('       Final tracking error: %.2f m\n', final_err);
-tr = test_helpers('assert', tr, final_err < 20, ...
-    'I5 final tracking error <20 m (cascade convergent)');
+tr = test_helpers('assert', tr, final_err < 3, ...
+    'I5 final tracking error <3 m (true hover convergence)');
 
 tr = test_helpers('report', tr);
 end

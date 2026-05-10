@@ -107,6 +107,11 @@ classdef Aircraft < handle
                     v0 = [0; 0; 0];
                     q0 = quat_utils('fromEuler', 0, deg2rad(90), 0);
                     w0 = [0; 0; 0];
+                case 'hover_at_altitude'
+                    p0 = [0; 0; -10];           % 10 m altitude (NED z down)
+                    v0 = [0; 0; 0];
+                    q0 = quat_utils('fromEuler', 0, deg2rad(90), 0);
+                    w0 = [0; 0; 0];
                 case 'cruise'
                     p0 = [0; 0; -50];           % 50 m altitude (NED z down)
                     v0 = [50; 0; 0];            % 50 m/s North

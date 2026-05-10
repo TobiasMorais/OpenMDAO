@@ -32,7 +32,7 @@ classdef PositionControllerNMPC < handle
         % Disturbance estimator: integral of position error gives steady-state
         % offset compensation for unmodeled forces (aero drag, slipstream, wind).
         d_hat = zeros(3,1);     % NED-frame disturbance specific-force estimate
-        d_max = 8.0;             % anti-windup limit [m/s^2]
+        d_max = 2.0;             % anti-windup limit [m/s^2] (vertical envelope)
     end
 
     methods
@@ -51,11 +51,11 @@ classdef PositionControllerNMPC < handle
             N  = obj.cfg.nmpc.N;
             dt = obj.cfg.nmpc.dt;
 
-            % --- Disturbance update (integrating action on position error) ---
-            % d_hat += k_d * (p_ref - p) * dt_outer
-            % This compensates steady-state offsets from aero/slipstream/wind.
+            % --- Disturbance update (slow integrating action on position error) ---
+            % Conservative gain: k_d=0.05 means d_hat reaches 1 m/s^2 of compensation
+            % only after ~20 s of sustained 1 m position offset. Slow, but stable.
             err_p = p_ref_traj(:,1) - p;
-            k_d = 0.4;                    % integration gain
+            k_d = 0.05;
             obj.d_hat = obj.d_hat + k_d * err_p * (1/obj.cfg.f_outer);
             obj.d_hat = max(-obj.d_max, min(obj.d_max, obj.d_hat));
 

@@ -35,8 +35,12 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
     wind_model = DrydenWind(sim_cfg.wind);
     surf_defs  = aero.build_surface_strips();
 
-    % Initial state
-    x = aircraft.initial_state('hover');
+    % Initial state (override via sim_cfg.init_mode if provided)
+    init_mode = 'hover';
+    if isfield(sim_cfg, 'init_mode') && ~isempty(sim_cfg.init_mode)
+        init_mode = sim_cfg.init_mode;
+    end
+    x = aircraft.initial_state(init_mode);
 
     % Logging buffers
     N_steps = floor(min(sim_cfg.t_final, traj.total_time()) / sim_cfg.dt) + 1;
@@ -91,14 +95,21 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
         prev_attitude_state.Wd = Wd;
 
         % --- Inner attitude loop ---
+        % NOTE: We pass ZERO Wd, Wd_dot to inner controllers because the FD-
+        % based estimates from force_to_attitude spike at every NMPC update
+        % (qd jumps when F_cmd_NED jumps every outer_period steps). Pure-
+        % feedback SO(3) is slightly slower but unconditionally stable, while
+        % the FD-amplified FF can drive divergence. If smoother qd profiles
+        % are available (e.g., from differential flatness recover_states), Wd
+        % can be re-enabled with care.
         switch upper(ctrl_cfg.inner.type)
             case 'SO3'
                 Rd = quat_utils('toR', qd);
-                M_cmd = inner.compute(R_BW, w_B, Rd, Wd, Wd_dot, ac_cfg.J, t);
+                M_cmd = inner.compute(R_BW, w_B, Rd, zeros(3,1), zeros(3,1), ac_cfg.J, t);
                 F_virtual_B = R_BW' * F_cmd_NED;
             case 'INDI'
                 u_meas = [prop.Omega_actual.^2 * ac_cfg.rotor.kT; 0; 0; 0];
-                [Du, ~] = inner.compute(q, w_B, qd, Wd_dot, u_meas, t);
+                [Du, ~] = inner.compute(q, w_B, qd, zeros(3,1), u_meas, t);
                 M_cmd = ac_cfg.J * (Du(1:3));   % approximate: pretend Du is angular accel demand
                 % Note: in pure INDI Du IS the increment in actuators; the allocator below
                 % handles producing the actual motor commands. To unify with SO3 path we
