@@ -155,7 +155,18 @@ addpath(ctrl_path);
 ctrl = controller_config();
 omega_n_inner = sqrt(ctrl.so3.kR(2,2) / ac.J(2,2));   % pitch axis
 tau_inner = 1 / (omega_n_inner * 0.7);
-tau_outer = 1 / ctrl.f_outer * 5;   % 5 outer steps for response
+% Outer NMPC closed-loop time constant from cost gains (NOT sample period).
+% omega_n_outer^2 = sqrt(Qp/R), so omega_n = (Qp/R)^(1/4) -- careful: this is
+% for the position-error-to-acceleration ratio acting as a 2nd-order system.
+% For a more accurate value, the closed-loop bandwidth for the simplified
+% problem of point-mass with cost J = q*p^2 + r*f^2 over infinite horizon:
+%   K_p_eff = sqrt(q/r),  omega_n_outer^2 = K_p_eff,  hence
+%   omega_n_outer = (q/r)^(1/4)
+Qp_y = ctrl.nmpc.Q_pos(1,1);
+R_acc = ctrl.nmpc.R_acc(1,1);
+omega_n_outer = (Qp_y / R_acc) ^ 0.25;
+zeta_outer    = 0.85;
+tau_outer = 1 / (omega_n_outer * zeta_outer);
 ratio_inner_motor  = tau_inner / tau_motor;
 ratio_outer_inner  = tau_outer / tau_inner;
 print_check('Motor tau (1st order)', sprintf('%.3f s', tau_motor), ...
@@ -163,7 +174,7 @@ print_check('Motor tau (1st order)', sprintf('%.3f s', tau_motor), ...
 print_check('Inner SO3 tau (1/zeta*wn)', sprintf('%.3f s', tau_inner), ...
     tau_inner > tau_motor * 1.5, ...
     sprintf('Separation: inner/motor = %.1fx (need >1.5)', ratio_inner_motor));
-print_check('Outer NMPC tau (5*dt_outer)', sprintf('%.3f s', tau_outer), ...
+print_check('Outer NMPC tau (from Qp/R)', sprintf('%.3f s', tau_outer), ...
     tau_outer > tau_inner * 1.5, ...
     sprintf('Separation: outer/inner = %.1fx (need >1.5)', ratio_outer_inner));
 results.cascade_separation = [ratio_inner_motor, ratio_outer_inner];

@@ -4,7 +4,7 @@ function sim = simulation_config()
 %% --- Numerical integration ---
 sim.solver   = 'rk4';     % 'rk4' (fixed-step, HIL-ready) | 'ode45' (variable, accuracy)
 sim.dt       = 0.002;     % [s] fixed-step (500 Hz, matches inner loop)
-sim.t_final  = 220.0;     % [s] full mission default (1500 kg vehicle, ~150 s trajectory)
+sim.t_final  = 400.0;     % [s] full mission with conservative trajectory respecting pitch authority
 
 %% --- Default mission scenario ---
 % Selectable: 'full_mission', 'transition_only', 'hover_disturbed'
