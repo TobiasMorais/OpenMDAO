@@ -104,7 +104,7 @@ ac.slipstream.bath_matrix = [ ...
     1, 0, 1, 1;   % rotor 2 (right lower) bathes right wing + htail + vtail
     0, 1, 1, 0;   % rotor 3 (left upper)
     0, 1, 1, 1];  % rotor 4 (left lower)
-ac.slipstream.k_s   = 1.8;                    % wake development factor (Patterson 2014)
+ac.slipstream.k_s   = 1.0;                    % wake development factor (conservative; was 1.8)
 ac.slipstream.x_off = 0.8;                    % [m] longitudinal distance rotor->surface
 
 %% --- Energy storage (constant mass for eVTOL) ---

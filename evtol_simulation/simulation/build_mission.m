@@ -30,6 +30,12 @@ function waypoints = build_mission(scenario)
                   0,    0,   -30,   0;
                   0,    0,   -30,   0];
 
+        case 'hover_only'
+            % Pure stationary hover at 30 m altitude — minimal integration test.
+            waypoints = [
+                  0,    0,     0,   0;
+                  0,    0,   -30,   0];
+
         otherwise
             error('Unknown scenario: %s', scenario);
     end

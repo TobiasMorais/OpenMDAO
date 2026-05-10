@@ -29,6 +29,10 @@ classdef PositionControllerNMPC < handle
         cfg
         last_solution = [];
         m_total
+        % Disturbance estimator: integral of position error gives steady-state
+        % offset compensation for unmodeled forces (aero drag, slipstream, wind).
+        d_hat = zeros(3,1);     % NED-frame disturbance specific-force estimate
+        d_max = 8.0;             % anti-windup limit [m/s^2]
     end
 
     methods
@@ -39,12 +43,21 @@ classdef PositionControllerNMPC < handle
 
         function reset(obj)
             obj.last_solution = [];
+            obj.d_hat = zeros(3,1);
         end
 
         function f_cmd = compute(obj, p, v, p_ref_traj, v_ref_traj)
             % p_ref_traj, v_ref_traj: 3 x (N+1) reference horizon
             N  = obj.cfg.nmpc.N;
             dt = obj.cfg.nmpc.dt;
+
+            % --- Disturbance update (integrating action on position error) ---
+            % d_hat += k_d * (p_ref - p) * dt_outer
+            % This compensates steady-state offsets from aero/slipstream/wind.
+            err_p = p_ref_traj(:,1) - p;
+            k_d = 0.4;                    % integration gain
+            obj.d_hat = obj.d_hat + k_d * err_p * (1/obj.cfg.f_outer);
+            obj.d_hat = max(-obj.d_max, min(obj.d_max, obj.d_hat));
 
             % Warm start
             if isempty(obj.last_solution)
@@ -69,7 +82,15 @@ classdef PositionControllerNMPC < handle
             end
 
             obj.last_solution = u_opt;
-            f_cmd = u_opt(1:3);
+            % Apply disturbance compensation outside the optimization horizon
+            % (treated as a known additive offset in the actuator).
+            f_cmd = u_opt(1:3) + obj.d_hat;
+
+            % Saturate combined command at a_max
+            mag = norm(f_cmd);
+            if mag > a_max
+                f_cmd = f_cmd * (a_max / mag);
+            end
         end
 
         function J = cost_and_dynamics(obj, u, p, v, pr, vr, N, dt)
