@@ -51,11 +51,14 @@ classdef PositionControllerNMPC < handle
             N  = obj.cfg.nmpc.N;
             dt = obj.cfg.nmpc.dt;
 
-            % --- Disturbance update (integrating action on position error) ---
-            % k_d=0.2 gives ~5 s time constant for steady-state offset compensation
-            % from unmodeled aero drag (slipstream produces ~0.13 m/s^2 in hover).
+            % --- Disturbance update (DISABLED) ---
+            % Theoretical analysis shows NMPC alone (Qp=10, R=0.05) holds hover
+            % within ~9 mm of reference under 0.13 m/s^2 aero disturbance, since
+            % effective P-gain = sqrt(Qp/R) = 14. Adding integral d_hat caused
+            % windup-driven divergence (saturation at d_max -> oscillation amplifies).
+            % Keeping the field for backward compatibility but with k_d=0.
             err_p = p_ref_traj(:,1) - p;
-            k_d = 0.2;
+            k_d = 0.0;
             obj.d_hat = obj.d_hat + k_d * err_p * (1/obj.cfg.f_outer);
             obj.d_hat = max(-obj.d_max, min(obj.d_max, obj.d_hat));
 

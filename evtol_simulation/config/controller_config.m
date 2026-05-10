@@ -13,12 +13,14 @@ ctrl.inner.type = 'SO3';   % 'SO3' | 'INDI'  (toggleable in main.m)
 %   kR    ~ J * omega_n^2     omega_n: desired bandwidth
 %   kOm   ~ 2 * zeta * omega_n * J
 % Tailsitter J = diag([2200, 3800, 5500]) kg*m^2 (with J_xz cross term).
-% Selection: omega_n = 5 rad/s, zeta = 0.7 (well-damped, stays inside 4*4500*5 N*m envelope).
-omega_n  = 5.0;
+% Selection: omega_n = 8 rad/s, zeta = 0.7. This gives the inner loop
+% sufficient bandwidth separation (~5x) above the outer NMPC effective
+% bandwidth (~1-2 rad/s), which is required for cascade stability.
+omega_n  = 8.0;
 zeta_att = 0.7;
 J_diag = [2200; 3800; 5500];                    % must match aircraft_config J diagonal
-ctrl.so3.kR    = diag(J_diag * omega_n^2);              % [55000, 95000, 137500]
-ctrl.so3.kOm   = diag(2 * zeta_att * omega_n * J_diag); % [15400, 26600, 38500]
+ctrl.so3.kR    = diag(J_diag * omega_n^2);              % [140800, 243200, 352000]
+ctrl.so3.kOm   = diag(2 * zeta_att * omega_n * J_diag); % [24640, 42560, 61600]
 ctrl.so3.kI    = diag(0.05 * J_diag);                   % integral matched to inertia
 ctrl.so3.I_max = deg2rad(15.0);                          % anti-windup saturation
 
