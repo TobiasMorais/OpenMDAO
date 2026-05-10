@@ -32,25 +32,40 @@ classdef TrajectoryOptimizer < handle
 
             % Time allocation respecting per-rotor thrust saturation envelope.
             %
-            % For 8th-order rest-to-rest min-snap polynomial of length d over T,
-            % peak acceleration is bounded by a_peak <= C * d / T^2 (kinematic
-            % bound from coefficient analysis; C ~ 13 for symmetric BC sets,
-            % we use 15 as small safety margin).
-            % Required thrust per rotor: T_i = m * sqrt(a_peak^2 + g^2) / N_rotors
-            % Constrained: T_i <= alpha * T_max  with alpha=0.92 (margin above
-            % hover requirement m*g/(N*T_max) = 0.817 for this aircraft).
+            % Peak specific force during a min-snap segment depends on direction:
+            %   Vertical climb:    F = m*(a_peak + g)     (worst case)
+            %   Horizontal:        F = m*sqrt(a_peak^2 + g^2)
+            %   Vertical descent:  F = m*(a_peak - g)     (gravity assists, easy)
             %
-            % Solving for T:
-            %   a_envelope = (alpha * N_rotors * T_max) / m
-            %   a_max_design = sqrt(a_envelope^2 - g^2)        [horizontal accel budget]
-            %   T_min = sqrt( C * d / a_max_design )
-            d_seg = vecnorm(diff(waypoints(:,1:3)),2,2);
-            alpha = 0.92;
+            % We compute per-segment time based on which axis dominates the
+            % displacement, picking the more restrictive envelope.
+            %
+            % Bounds:
+            %   a_envelope = alpha * N * T_max / m
+            %   a_max_vert  = a_envelope - g                (vertical climb)
+            %   a_max_horiz = sqrt(a_envelope^2 - g^2)      (pure horizontal)
+            %   T_seg = sqrt( C * d / a_max_eff )           with C=15 (rest-to-rest 8th-order bound)
+
+            d_vec = diff(waypoints(:, 1:3));
+            N_seg = size(d_vec, 1);
+            alpha = 0.95;
             peak_acc_coef = 15;
+            g = 9.80665;
             T_per_max = alpha * ac_cfg.rotor.thrust_max;
             a_envelope = (ac_cfg.n_rotors * T_per_max) / ac_cfg.mass;
-            a_max_design = sqrt(max(a_envelope^2 - 9.80665^2, 1.0));
-            t_seg = max(3.0, sqrt(peak_acc_coef * d_seg / a_max_design));
+            a_max_vert  = max(a_envelope - g, 0.3);
+            a_max_horiz = sqrt(max(a_envelope^2 - g^2, 1.0));
+
+            t_seg = zeros(N_seg, 1);
+            for k = 1:N_seg
+                d_h = norm(d_vec(k, 1:2));
+                d_v = abs(d_vec(k, 3));
+                d_t = max(norm(d_vec(k, :)), 1e-6);
+                % Effective design accel: vertical-weighted blend
+                w_v = d_v / d_t;
+                a_eff = w_v * a_max_vert + (1 - w_v) * a_max_horiz;
+                t_seg(k) = max(3.0, sqrt(peak_acc_coef * d_t / a_eff));
+            end
 
             obj.baseline = DifferentialFlatness(waypoints, t_seg);
         end
