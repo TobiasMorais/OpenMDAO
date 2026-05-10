@@ -71,8 +71,10 @@ classdef MissionTrajectory < handle
                     psi_dot = (ph.psi_end - ph.psi_start) / ph.duration;
             end
         end
+    end
 
-        % --- Static factory methods for common phases ---
+    % --- Static factory methods for common phases ---
+    methods (Static)
         function ph = make_hover(position, duration, psi)
             if nargin < 3, psi = 0; end
             ph.type = 'hover';

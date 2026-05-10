@@ -79,6 +79,14 @@ log = run_simulation(ac, ctrl, sim, traj);
 %% --- Visualize ---
 plot_telemetry(log, ac);
 
+%% --- Physical validation against analytical predictions ---
+addpath(fullfile(here, 'tests'));
+if exist('mission_info', 'var')
+    validate_physics(log, ac, mission_info);
+else
+    validate_physics(log, ac, struct());
+end
+
 %% --- Final report ---
 err_norm = vecnorm(log.tracking_err, 2, 1);
 fprintf('\n========================================================\n');
