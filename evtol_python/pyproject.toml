@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evtol"
+version = "1.0.0"
+description = "6-DOF eVTOL tailsitter simulation framework (1500 kg, 4 rotors with cant)"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Tobias Morais"}]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0", "pytest-cov"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["evtol*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
