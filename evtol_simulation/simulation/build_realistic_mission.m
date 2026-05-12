@@ -1,37 +1,35 @@
 function [traj, info] = build_realistic_mission(ac_cfg, opts)
-% BUILD_REALISTIC_MISSION  Conservative tailsitter mission (rest-to-rest only).
+% BUILD_REALISTIC_MISSION  Mission using DifferentialFlatness (proven in hover test).
 %
-% Engineering rationale: a true rest-to-cruise transition requires near-
-% saturated thrust + ~83 deg body rotation simultaneously, leaving zero
-% margin for the cascade. After multiple iterations we adopt a fully
-% rest-to-rest profile that is robustly trackable:
+% Engineering insight from many iterations: hover_only test PASSES
+% with DifferentialFlatness, but ANY mission with MissionTrajectory
+% diverges, even simple rest-to-rest climbs. To isolate the source of
+% divergence, this version uses DifferentialFlatness with explicit
+% waypoints — the same trajectory engine that powers the passing
+% hover test.
 %
-%   1. Vertical climb 0 -> 20 m            (rest-to-rest, pitch=90 deg)
-%   2. Hover hold at 20 m                  (20 s)
-%   3. Vertical climb 20 -> 1000 m         (rest-to-rest, pitch=90 deg)
-%   4. Slow horizontal cruise NORTH        (rest-to-rest at 1000 m)
+% Mission profile (user request, conservatively timed):
+%   1. Takeoff from -1 m to -20 m (climb 19 m)
+%   2. Hover at -20 m for 20 s (same waypoint, long time_alloc)
+%   3. Climb to -1000 m (slow)
+%   4. Slow horizontal motion to 1000 m north at 1000 m altitude
 %
-% The aircraft stays in tailsitter (hover) orientation throughout the climb
-% phases. Horizontal motion at 1000 m is done as a slow rest-to-rest
-% maneuver (NOT at V_LDmax — that would require sustained pitch transition
-% which the cascade cannot perform robustly with current bandwidth).
-%
-% This profile sacrifices L/D-optimal cruise for robust trackability.
-% Future work: implement L1 adaptive augmentation or NDI+INDI cascade
-% redesign to enable true V_LDmax cruise.
+% Initial state: aircraft starts at -1 m altitude (init_mode='hover_at_altitude'
+% modified). The 1 m gap above ground avoids the motor-spin-up transient
+% creating below-ground transient states that may confuse the cascade.
 
 if nargin < 2, opts = struct(); end
+opts = set_default(opts, 'alt_init_m',       1);
 opts = set_default(opts, 'alt_low_m',        20);
 opts = set_default(opts, 'alt_cruise_m',     1000);
-opts = set_default(opts, 'cruise_distance_m', 1000);   % shorter, slow cruise
+opts = set_default(opts, 'cruise_distance_m', 1000);
 opts = set_default(opts, 'hover_duration_s',  20);
-opts = set_default(opts, 'climb_safety',     2.0);    % 2x of physical minimum
 
 g = 9.80665;
 W = ac_cfg.mass * g;
 rho = 1.225;
 
-% --- Compute max L/D point (informational, NOT used as cruise target) ---
+% --- Compute max L/D point (informational) ---
 K = 1 / (pi * ac_cfg.wing.AR * ac_cfg.wing.e);
 CL_LDmax = sqrt(ac_cfg.wing.CD0 / K);
 V_LDmax = sqrt(2 * W / (rho * ac_cfg.wing.area * CL_LDmax));
@@ -43,68 +41,60 @@ info.alpha_LDmax_deg = rad2deg(alpha_LDmax);
 info.LD_max = LD_max;
 info.CL_LDmax = CL_LDmax;
 
-% --- Time allocation: use 30% of vertical envelope for high margin ---
-%   a_envelope = N * T_max / m
-%   a_vert_max = 0.3 * (a_envelope - g)   [conservative]
+% --- Time allocation: 30% of envelope, 2x safety factor ---
 a_envelope = (ac_cfg.n_rotors * ac_cfg.rotor.thrust_max) / ac_cfg.mass;
-a_vert_max = max(0.3 * (a_envelope - g), 0.2);   % minimum 0.2 m/s^2
+a_vert_max = max(0.3 * (a_envelope - g), 0.2);
+a_horiz_max = max(0.3 * sqrt(max(a_envelope^2 - g^2, 1.0)), 0.5);
 peak_acc_coef = 15;
 
-% Phase 1: vertical climb 0 -> -20 m
-T_climb1 = max(8.0, opts.climb_safety * sqrt(peak_acc_coef * opts.alt_low_m / a_vert_max));
-
-% Phase 2: hover hold at -20 m
-T_hover = opts.hover_duration_s;
-
-% Phase 3: vertical climb 20 -> 1000 m (rest-to-rest, slow)
+T_climb1 = max(8.0, 2 * sqrt(peak_acc_coef * (opts.alt_low_m - opts.alt_init_m) / a_vert_max));
+T_hover  = opts.hover_duration_s;
 d_alt = opts.alt_cruise_m - opts.alt_low_m;
-T_climb2 = max(45.0, opts.climb_safety * sqrt(peak_acc_coef * d_alt / a_vert_max));
+T_climb2 = max(45.0, 2 * sqrt(peak_acc_coef * d_alt / a_vert_max));
+T_cruise = max(30.0, 2 * sqrt(peak_acc_coef * opts.cruise_distance_m / a_horiz_max));
 
-% Phase 4: rest-to-rest horizontal motion at 1000 m altitude
-% Use horizontal envelope: a_horiz_max = 0.3 * sqrt(a_env^2 - g^2)
-a_horiz_max = max(0.3 * sqrt(max(a_envelope^2 - g^2, 1.0)), 0.5);
-T_cruise = max(30.0, opts.climb_safety * sqrt(peak_acc_coef * opts.cruise_distance_m / a_horiz_max));
+% --- Waypoints (4 segments via 5 waypoints) ---
+% NED: x=North, y=East, z=Down. psi=heading.
+waypoints = [
+    0, 0, -opts.alt_init_m,   0;    % start above ground
+    0, 0, -opts.alt_low_m,    0;    % after climb to 20 m
+    0, 0, -opts.alt_low_m,    0;    % after hover (same pt, long time)
+    0, 0, -opts.alt_cruise_m, 0;    % after climb to 1000 m
+    opts.cruise_distance_m, 0, -opts.alt_cruise_m, 0   % after slow cruise N
+];
+time_alloc = [T_climb1; T_hover; T_climb2; T_cruise];
 
-% --- Build phases (rest-to-rest only, no rest-to-cruise) ---
-p_origin   = [0; 0; 0];
-p_alt_low  = [0; 0; -opts.alt_low_m];
-p_alt_high = [0; 0; -opts.alt_cruise_m];
-p_north    = [opts.cruise_distance_m; 0; -opts.alt_cruise_m];
+% Use DifferentialFlatness (proven engine — same as hover_only test)
+traj = DifferentialFlatness(waypoints, time_alloc);
 
-ph1 = MissionTrajectory.make_rest_to_rest(p_origin,   p_alt_low,  T_climb1);
-ph2 = MissionTrajectory.make_hover(p_alt_low, T_hover);
-ph3 = MissionTrajectory.make_rest_to_rest(p_alt_low,  p_alt_high, T_climb2);
-ph4 = MissionTrajectory.make_rest_to_rest(p_alt_high, p_north,    T_cruise);
-
-traj = MissionTrajectory({ph1, ph2, ph3, ph4});
-
-info.T_climb1  = T_climb1;
-info.T_hover   = T_hover;
-info.T_climb2  = T_climb2;
-info.T_cruise  = T_cruise;
-info.T_total   = traj.total_time();
+info.T_climb1 = T_climb1;
+info.T_hover  = T_hover;
+info.T_climb2 = T_climb2;
+info.T_cruise = T_cruise;
+info.T_total  = traj.total_time();
 info.distance_north_total = opts.cruise_distance_m;
+info.init_mode = 'hover_at_altitude_init';
+info.alt_init_m = opts.alt_init_m;
 
-% --- Print mission summary ---
+% --- Print summary ---
 fprintf('\n========================================================\n');
-fprintf('   Conservative Realistic Mission Profile\n');
+fprintf('   Realistic Mission (DifferentialFlatness engine)\n');
 fprintf('========================================================\n');
-fprintf('   Design point reference (informational, not used as target):\n');
-fprintf('     V_LDmax     = %.2f m/s (%.0f km/h)\n', V_LDmax, V_LDmax*3.6);
-fprintf('     alpha_LDmax = %.2f deg\n', rad2deg(alpha_LDmax));
-fprintf('     L/D_max     = %.2f\n', LD_max);
+fprintf('   Design point reference:\n');
+fprintf('     V_LDmax = %.1f m/s | alpha_LDmax = %.1f deg | L/D = %.1f\n', ...
+    V_LDmax, rad2deg(alpha_LDmax), LD_max);
 fprintf('\n');
-fprintf('   Trajectory (rest-to-rest only, robust tracking):\n');
-fprintf('     a_vert_max  = %.2f m/s^2 (30%% of envelope)\n', a_vert_max);
-fprintf('     a_horiz_max = %.2f m/s^2 (30%% of envelope)\n', a_horiz_max);
+fprintf('   Conservative trajectory (30%% envelope, 2x safety, all rest-to-rest):\n');
+fprintf('     a_vert_max = %.2f m/s^2  |  a_horiz_max = %.2f m/s^2\n', ...
+    a_vert_max, a_horiz_max);
 fprintf('\n');
+fprintf('   Initial state: aircraft at -%.0f m altitude (clear of ground)\n', opts.alt_init_m);
 fprintf('   Phase durations:\n');
-fprintf('     1. Vertical climb 0->%.0fm    : %.1f s\n', opts.alt_low_m, T_climb1);
-fprintf('     2. Hover at %.0f m              : %.1f s\n', opts.alt_low_m, T_hover);
-fprintf('     3. Vertical climb %.0f->%.0fm  : %.1f s\n', opts.alt_low_m, opts.alt_cruise_m, T_climb2);
-fprintf('     4. Slow cruise %.0fm north      : %.1f s\n', opts.cruise_distance_m, T_cruise);
-fprintf('     TOTAL                          : %.1f s (%.2f min)\n', ...
-    info.T_total, info.T_total/60);
+fprintf('     1. Climb %d->%dm     : %.1f s\n', opts.alt_init_m, opts.alt_low_m, T_climb1);
+fprintf('     2. Hover at %d m       : %.1f s\n', opts.alt_low_m, T_hover);
+fprintf('     3. Climb %d->%dm    : %.1f s\n', opts.alt_low_m, opts.alt_cruise_m, T_climb2);
+fprintf('     4. Cruise %dm N      : %.1f s\n', opts.cruise_distance_m, T_cruise);
+fprintf('     TOTAL                  : %.1f s (%.2f min)\n', info.T_total, info.T_total/60);
 fprintf('========================================================\n\n');
 
 end

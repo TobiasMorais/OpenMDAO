@@ -25,6 +25,7 @@ ctrl_cfg.inner.type = 'SO3';
 
 [traj, info] = build_realistic_mission(ac_cfg);
 sim_cfg.t_final = traj.total_time() + 5;
+sim_cfg.init_mode = info.init_mode;   % start at -1 m (clear of ground)
 
 fprintf('       Running %.0f s realistic mission integration...\n', sim_cfg.t_final);
 log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj);

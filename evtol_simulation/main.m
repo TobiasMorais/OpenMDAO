@@ -49,10 +49,11 @@ fprintf('Mass: %.0f kg | Rotors: %d | Inner: %s | Mission: %s\n', ...
 %% --- Mission and trajectory ---
 switch lower(MISSION)
     case 'realistic'
-        % Realistic 4-phase mission (climb, hover, climb-to-cruise, cruise)
-        % designed at max L/D efficiency point
+        % Conservative 4-phase mission (DifferentialFlatness engine).
+        % All rest-to-rest, 30% envelope, 2x safety on time.
         [traj, mission_info] = build_realistic_mission(ac);
         sim.t_final = traj.total_time() + 10;
+        sim.init_mode = mission_info.init_mode;   % start at -1m
 
     case 'legacy_full'
         waypoints = build_mission('full_mission');
