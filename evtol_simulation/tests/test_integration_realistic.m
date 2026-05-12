@@ -29,14 +29,12 @@ sim_cfg.t_final = traj.total_time() + 5;
 fprintf('       Running %.0f s realistic mission integration...\n', sim_cfg.t_final);
 log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj);
 
-% Phase indices
+% Phase indices (new 4-phase rest-to-rest mission)
 N = length(log.t);
 t = log.t;
-% Approximate phase boundaries from build_realistic_mission timing
 t_p1_end = info.T_climb1;
 t_p2_end = t_p1_end + info.T_hover;
-t_p3_end = t_p2_end + info.T_transition;
-% t_p4_end is end of cruise
+t_p3_end = t_p2_end + info.T_climb2;
 idx_p1 = find(t <= t_p1_end);
 idx_p2 = find(t > t_p1_end & t <= t_p2_end);
 idx_p3 = find(t > t_p2_end & t <= t_p3_end);
@@ -44,46 +42,36 @@ idx_p4 = find(t > t_p3_end);
 
 err = vecnorm(log.tracking_err, 2, 1);
 
-% I1: Phase 1 (climb 0->20m) tracking
+% I1: Phase 1 (climb 20m, rest-to-rest, easy)
 err_p1 = max(err(idx_p1));
 fprintf('       Phase 1 (climb 20m)        max_err = %.2f m\n', err_p1);
-tr = test_helpers('assert', tr, err_p1 < 20, 'I1 climb tracking <20m');
+tr = test_helpers('assert', tr, err_p1 < 5, 'I1 climb tracking <5m');
 
-% I2: Phase 2 (hover 20s) tracking — should be very tight
+% I2: Phase 2 (hover 20s at -20m) — must be very tight
 err_p2 = max(err(idx_p2));
 fprintf('       Phase 2 (hover 20s)        max_err = %.2f m\n', err_p2);
-tr = test_helpers('assert', tr, err_p2 < 5, 'I2 hover tracking <5m');
+tr = test_helpers('assert', tr, err_p2 < 3, 'I2 hover tracking <3m');
 
-% I3: Phase 3 (climb to 1000m + transition) — looser due to attitude swing
+% I3: Phase 3 (slow rest-to-rest climb to 1000m)
 err_p3 = max(err(idx_p3));
-fprintf('       Phase 3 (climb-transition) max_err = %.2f m\n', err_p3);
-tr = test_helpers('assert', tr, err_p3 < 200, 'I3 transition tracking <200m');
+fprintf('       Phase 3 (climb to 1000m)   max_err = %.2f m\n', err_p3);
+tr = test_helpers('assert', tr, err_p3 < 20, 'I3 climb 1000m tracking <20m');
 
-% I4: Phase 4 (cruise) — should converge to small error after settling
+% I4: Phase 4 (slow horizontal cruise at 1000m, rest-to-rest)
 if ~isempty(idx_p4)
-    % Skip first 30s of cruise as transient settling
-    idx_p4_settled = idx_p4(t(idx_p4) > t_p3_end + 30);
-    if ~isempty(idx_p4_settled)
-        err_p4 = max(err(idx_p4_settled));
-    else
-        err_p4 = max(err(idx_p4));
-    end
-    fprintf('       Phase 4 (cruise settled)   max_err = %.2f m\n', err_p4);
-    tr = test_helpers('assert', tr, err_p4 < 100, 'I4 cruise tracking <100m');
+    err_p4 = max(err(idx_p4));
+    fprintf('       Phase 4 (slow cruise)      max_err = %.2f m\n', err_p4);
+    tr = test_helpers('assert', tr, err_p4 < 50, 'I4 horizontal cruise tracking <50m');
 else
     tr = test_helpers('assert', tr, true, 'I4 cruise (skipped - not reached)');
 end
 
-% I5: Pitch transitions correctly (90 -> ~7 deg in cruise)
-if ~isempty(idx_p4)
-    pitch_cruise = log.pitch_deg(idx_p4);
-    pitch_mean = mean(pitch_cruise);
-    fprintf('       Cruise mean pitch = %.1f deg (expected ~%.1f deg)\n', ...
-        pitch_mean, info.alpha_LDmax_deg);
-    % Tailsitter cruise pitch is the alpha (small positive AoA)
-    tr = test_helpers('assert', tr, abs(pitch_mean - info.alpha_LDmax_deg) < 30, ...
-        'I5 cruise pitch near alpha_LDmax');
-end
+% I5: Pitch stays near +90 deg throughout (no aggressive transition)
+pitch_all = log.pitch_deg(t > 1);  % skip initial transient
+pitch_mean = mean(pitch_all);
+fprintf('       Mean pitch (whole mission, t>1s) = %.1f deg (expected ~90)\n', pitch_mean);
+tr = test_helpers('assert', tr, abs(pitch_mean - 90) < 20, ...
+    'I5 mean pitch near 90 deg (tailsitter held upright)');
 
 % I6: Quaternion always normalized
 qnorm_err = max(abs(vecnorm(log.quat, 2, 1) - 1));
