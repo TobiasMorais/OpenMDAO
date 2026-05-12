@@ -54,8 +54,19 @@ evtol_simulation/
 
 ## Uso rápido
 
+### Passo 1 — Rodar a suíte de testes ANTES de qualquer simulação
+
 ```matlab
 cd evtol_simulation
+addpath('tests')
+tests/run_all_tests
+```
+
+A suíte (15 testes, 92 verificações) valida cada componente isoladamente. **Toda integração deve esperar 15/15 PASS**. Detalhes: [`docs/TEST_PROCEDURE.md`](docs/TEST_PROCEDURE.md).
+
+### Passo 2 — Rodar a missão completa
+
+```matlab
 main
 ```
 

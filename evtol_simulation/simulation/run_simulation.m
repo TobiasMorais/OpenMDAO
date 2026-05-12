@@ -31,15 +31,33 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
             error('Unknown inner controller: %s', ctrl_cfg.inner.type);
     end
 
-    outer = PositionControllerNMPC(ctrl_cfg, ac_cfg.mass);
+    % --- Outer loop controller selection ---
+    if isfield(ctrl_cfg, 'outer') && isfield(ctrl_cfg.outer, 'type')
+        outer_type = ctrl_cfg.outer.type;
+    else
+        outer_type = 'PDFF';   % default to robust PD+FF (industry-standard for trajectory tracking)
+    end
+    switch upper(outer_type)
+        case 'NMPC'
+            outer = PositionControllerNMPC(ctrl_cfg, ac_cfg.mass);
+        case 'PDFF'
+            outer = PositionControllerPDFF(ctrl_cfg, ac_cfg.mass);
+        otherwise
+            error('Unknown outer controller: %s', outer_type);
+    end
     wind_model = DrydenWind(sim_cfg.wind);
     surf_defs  = aero.build_surface_strips();
 
-    % Initial state
-    x = aircraft.initial_state('hover');
+    % Initial state (override via sim_cfg.init_mode if provided)
+    init_mode = 'hover';
+    if isfield(sim_cfg, 'init_mode') && ~isempty(sim_cfg.init_mode)
+        init_mode = sim_cfg.init_mode;
+    end
+    x = aircraft.initial_state(init_mode);
 
-    % Logging buffers
-    N_steps = floor(min(sim_cfg.t_final, traj.total_time()) / sim_cfg.dt) + 1;
+    % Logging buffers — run for t_final regardless of trajectory length.
+    % After traj.total_time() the reference is held at the last waypoint.
+    N_steps = floor(sim_cfg.t_final / sim_cfg.dt) + 1;
     log = init_log(N_steps);
 
     % Outer loop trigger
@@ -62,11 +80,11 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
 
         R_BW = quat_utils('toR', q);
 
-        % --- Reference trajectory sample ---
-        [p_ref, v_ref, ~, ~, ~, psi_d, ~] = traj.eval(min(t, traj.total_time()));
+        % --- Reference trajectory sample (incl. accel for FF) ---
+        [p_ref, v_ref, a_ref, ~, ~, psi_d, ~] = traj.eval(min(t, traj.total_time()));
         psi_des = psi_d;
 
-        % --- Outer loop (NMPC) ---
+        % --- Outer loop (NMPC or PDFF) ---
         if mod(k-1, outer_period) == 0
             % Build short reference horizon by sampling traj
             p_horizon = zeros(3, horizon_pts);
@@ -77,7 +95,12 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
                 p_horizon(:, j+1) = pj;
                 v_horizon(:, j+1) = vj;
             end
-            F_specific = outer.compute(p_NED, v_NED, p_horizon, v_horizon);
+            % PDFF accepts a_ref feedforward; NMPC ignores it
+            if isa(outer, 'PositionControllerPDFF')
+                F_specific = outer.compute(p_NED, v_NED, p_horizon, v_horizon, a_ref);
+            else
+                F_specific = outer.compute(p_NED, v_NED, p_horizon, v_horizon);
+            end
             F_cmd_NED = ac_cfg.mass * F_specific;
         end
 
@@ -91,21 +114,31 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
         prev_attitude_state.Wd = Wd;
 
         % --- Inner attitude loop ---
+        % NOTE: We pass ZERO Wd, Wd_dot to inner controllers because the FD-
+        % based estimates from force_to_attitude spike at every NMPC update
+        % (qd jumps when F_cmd_NED jumps every outer_period steps). Pure-
+        % feedback SO(3) is slightly slower but unconditionally stable, while
+        % the FD-amplified FF can drive divergence. If smoother qd profiles
+        % are available (e.g., from differential flatness recover_states), Wd
+        % can be re-enabled with care.
         switch upper(ctrl_cfg.inner.type)
             case 'SO3'
                 Rd = quat_utils('toR', qd);
-                M_cmd = inner.compute(R_BW, w_B, Rd, Wd, Wd_dot, ac_cfg.J, t);
-                F_virtual_B = R_BW' * F_cmd_NED;
+                M_cmd = inner.compute(R_BW, w_B, Rd, zeros(3,1), zeros(3,1), ac_cfg.J, t);
+                % Body-frame virtual force: only the magnitude along +x_B
+                % (which is what the rotors physically produce). The body is
+                % rotated to align x_B with F_cmd_NED by the SO(3) loop;
+                % giving the allocator off-axis components would force it to
+                % use surfaces/diff-thrust to fight a misalignment that SO(3)
+                % is already correcting -- causes loop instability.
+                F_virtual_B = [norm(F_cmd_NED); 0; 0];
             case 'INDI'
                 u_meas = [prop.Omega_actual.^2 * ac_cfg.rotor.kT; 0; 0; 0];
-                [Du, ~] = inner.compute(q, w_B, qd, Wd_dot, u_meas, t);
+                [Du, ~] = inner.compute(q, w_B, qd, zeros(3,1), u_meas, t);
                 M_cmd = ac_cfg.J * (Du(1:3));   % approximate: pretend Du is angular accel demand
-                % Note: in pure INDI Du IS the increment in actuators; the allocator below
-                % handles producing the actual motor commands. To unify with SO3 path we
-                % project to virtual moments via the effectiveness Jacobian.
                 G_att = alloc.attitude_effectiveness();
                 M_cmd = ac_cfg.J * (G_att * Du(1:ac_cfg.n_rotors));
-                F_virtual_B = R_BW' * F_cmd_NED;
+                F_virtual_B = [norm(F_cmd_NED); 0; 0];
         end
 
         % --- Allocation ---

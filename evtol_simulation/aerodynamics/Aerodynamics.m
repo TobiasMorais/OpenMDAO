@@ -69,6 +69,10 @@ classdef Aerodynamics < handle
                 CL = sign(alpha) * CL_v;
                 CD = max(0.01, CD_v);
             end
+            % Hard saturation on CL/CD to prevent integrator blow-up from any
+            % near-singular Viterna evaluation that the airfoil_360 wrap might miss.
+            CL = max(-2.0, min(2.0, CL));
+            CD = max(0.0, min(2.5, CD));
         end
 
         function [F_B, M_B] = compute_forces_moments(obj, V_B, w_B, surf_def, V_slip_per_surf, rho)

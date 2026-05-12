@@ -35,23 +35,22 @@ classdef DifferentialFlatness < handle
             N_seg = size(obj.waypoints, 1) - 1;
             C = zeros(4, 8, N_seg);
 
+            % Solve in normalized time u = tau/T (range [0,1]) to avoid the
+            % catastrophic ill-conditioning of A when T is large (T^7 entries).
+            % Coefficients C(d,:,k) are now coefficients of polynomial in u.
+            % Storing T in obj.time_alloc; eval() uses u = (t - t_segstart)/T.
+            A = [1 0 0 0 0 0 0 0;            % p(0)
+                 0 1 0 0 0 0 0 0;            % p'(0)
+                 0 0 2 0 0 0 0 0;            % p''(0)
+                 0 0 0 6 0 0 0 0;            % p'''(0)
+                 1 1 1 1 1 1 1 1;            % p(1)
+                 0 1 2 3 4 5 6 7;            % p'(1)
+                 0 0 2 6 12 20 30 42;        % p''(1)
+                 0 0 0 6 24 60 120 210];     % p'''(1)
             for k = 1:N_seg
-                T = obj.time_alloc(k);
                 p0 = obj.waypoints(k,   :);
                 p1 = obj.waypoints(k+1, :);
                 for d = 1:4
-                    % 8th-order polynomial: p(t) = sum_{j=0..7} c_j * t^j
-                    % BCs: p(0)=p0, p'(0)=0, p''(0)=0, p'''(0)=0
-                    %      p(T)=p1, p'(T)=0, p''(T)=0, p'''(T)=0
-                    % Closed-form result yields a symmetric polynomial.
-                    A = [1 0 0 0 0 0 0 0;
-                         0 1 0 0 0 0 0 0;
-                         0 0 2 0 0 0 0 0;
-                         0 0 0 6 0 0 0 0;
-                         1 T T^2 T^3 T^4 T^5 T^6 T^7;
-                         0 1 2*T 3*T^2 4*T^3 5*T^4 6*T^5 7*T^6;
-                         0 0 2 6*T 12*T^2 20*T^3 30*T^4 42*T^5;
-                         0 0 0 6 24*T 60*T^2 120*T^3 210*T^4];
                     b = [p0(d); 0; 0; 0; p1(d); 0; 0; 0];
                     C(d, :, k) = (A \ b)';
                 end
@@ -60,17 +59,21 @@ classdef DifferentialFlatness < handle
 
         function [pos, vel, acc, jerk, snap, psi_d, psi_dot] = eval(obj, t)
             % Evaluate trajectory at time t (0 <= t <= sum(time_alloc)).
+            % Polynomial is stored in normalized form (u = tau/T_seg in [0,1]);
+            % derivatives are scaled by 1/T^k when returned in physical time.
             T_cumul = [0; cumsum(obj.time_alloc(:))];
             t = max(0, min(t, T_cumul(end)));
             k = find(t <= T_cumul, 1) - 1;
             if isempty(k) || k < 1, k = 1; end
             tau = t - T_cumul(k);
+            T_seg = obj.time_alloc(k);
+            u = tau / T_seg;
 
-            powers   = tau .^ (0:7)';
-            d1coef   = (0:7)';
-            d2coef   = (0:7)' .* max(0, (-1:6)');
-            d3coef   = (0:7)' .* max(0, (-1:6)') .* max(0, (-2:5)');
-            d4coef   = (0:7)' .* max(0, (-1:6)') .* max(0, (-2:5)') .* max(0, (-3:4)');
+            U     = u .^ (0:7)';
+            Ud    = (1:7) .* u .^ (0:6); Ud = [0, Ud]';
+            Udd   = (1:6) .* (2:7) .* u .^ (0:5); Udd = [0, 0, Udd]';
+            Uddd  = (1:5) .* (2:6) .* (3:7) .* u .^ (0:4); Uddd = [0, 0, 0, Uddd]';
+            Udddd = (1:4) .* (2:5) .* (3:6) .* (4:7) .* u .^ (0:3); Udddd = [0, 0, 0, 0, Udddd]';
 
             sigma   = zeros(4,1);
             sigmad  = zeros(4,1);
@@ -79,12 +82,12 @@ classdef DifferentialFlatness < handle
             sigmadddd = zeros(4,1);
 
             for d = 1:4
-                c = squeeze(obj.coeffs(d, :, k))';
-                sigma(d)   = c' * powers;
-                sigmad(d)  = sum(d1coef .* c .* (tau.^max(0,(-1:6))'));
-                sigmadd(d) = sum(d2coef .* c .* (tau.^max(0,(-2:5))'));
-                sigmaddd(d) = sum(d3coef .* c .* (tau.^max(0,(-3:4))'));
-                sigmadddd(d) = sum(d4coef .* c .* (tau.^max(0,(-4:3))'));
+                c = squeeze(obj.coeffs(d, :, k));
+                sigma(d)     = c * U;
+                sigmad(d)    = (c * Ud)    / T_seg;
+                sigmadd(d)   = (c * Udd)   / T_seg^2;
+                sigmaddd(d)  = (c * Uddd)  / T_seg^3;
+                sigmadddd(d) = (c * Udddd) / T_seg^4;
             end
 
             pos    = sigma(1:3);

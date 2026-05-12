@@ -54,9 +54,13 @@ classdef AttitudeControllerSO3 < handle
             obj.ei = obj.ei + dt * e_R;
             obj.ei = max(-obj.cfg.so3.I_max, min(obj.cfg.so3.I_max, obj.ei));
 
-            % Feed-forward terms
-            term_ff = - J * ( so3_utils('hat', omega) * R' * Rd * Wd ...
-                              - R' * Rd * Wd_dot );
+            % Feed-forward terms (saturated to prevent FD-noise amplification)
+            % Wd, Wd_dot estimated by finite differences in force_to_attitude can
+            % spike during attitude transitions; cap them before injecting into J*(.).
+            Wd_safe     = max(-3.0, min(3.0, Wd));        % +/- 3 rad/s (~170 deg/s)
+            Wd_dot_safe = max(-2.0, min(2.0, Wd_dot));    % +/- 2 rad/s^2
+            term_ff = - J * ( so3_utils('hat', omega) * R' * Rd * Wd_safe ...
+                              - R' * Rd * Wd_dot_safe );
             M_cmd =  - obj.cfg.so3.kR  * e_R ...
                      - obj.cfg.so3.kOm * e_W ...
                      - obj.cfg.so3.kI  * obj.ei ...
