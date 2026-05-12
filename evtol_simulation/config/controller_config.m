@@ -32,7 +32,7 @@ ctrl.indi.K_rate  = diag([20, 25, 12]); % rate-loop proportional gain
 ctrl.indi.K_att   = diag([10, 12,  6]); % attitude-loop proportional gain (cascaded)
 
 %% ----- Outer position/velocity loop -----
-ctrl.outer.type = 'NMPC';   % nonlinear MPC
+ctrl.outer.type = 'PDFF';   % 'PDFF' (PD with accel feedforward, default) | 'NMPC'
 
 % NMPC parameters
 ctrl.nmpc.N      = 20;            % horizon steps

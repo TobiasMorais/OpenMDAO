@@ -31,7 +31,20 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
             error('Unknown inner controller: %s', ctrl_cfg.inner.type);
     end
 
-    outer = PositionControllerNMPC(ctrl_cfg, ac_cfg.mass);
+    % --- Outer loop controller selection ---
+    if isfield(ctrl_cfg, 'outer') && isfield(ctrl_cfg.outer, 'type')
+        outer_type = ctrl_cfg.outer.type;
+    else
+        outer_type = 'PDFF';   % default to robust PD+FF (industry-standard for trajectory tracking)
+    end
+    switch upper(outer_type)
+        case 'NMPC'
+            outer = PositionControllerNMPC(ctrl_cfg, ac_cfg.mass);
+        case 'PDFF'
+            outer = PositionControllerPDFF(ctrl_cfg, ac_cfg.mass);
+        otherwise
+            error('Unknown outer controller: %s', outer_type);
+    end
     wind_model = DrydenWind(sim_cfg.wind);
     surf_defs  = aero.build_surface_strips();
 
@@ -67,11 +80,11 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
 
         R_BW = quat_utils('toR', q);
 
-        % --- Reference trajectory sample ---
-        [p_ref, v_ref, ~, ~, ~, psi_d, ~] = traj.eval(min(t, traj.total_time()));
+        % --- Reference trajectory sample (incl. accel for FF) ---
+        [p_ref, v_ref, a_ref, ~, ~, psi_d, ~] = traj.eval(min(t, traj.total_time()));
         psi_des = psi_d;
 
-        % --- Outer loop (NMPC) ---
+        % --- Outer loop (NMPC or PDFF) ---
         if mod(k-1, outer_period) == 0
             % Build short reference horizon by sampling traj
             p_horizon = zeros(3, horizon_pts);
@@ -82,7 +95,12 @@ function log = run_simulation(ac_cfg, ctrl_cfg, sim_cfg, traj)
                 p_horizon(:, j+1) = pj;
                 v_horizon(:, j+1) = vj;
             end
-            F_specific = outer.compute(p_NED, v_NED, p_horizon, v_horizon);
+            % PDFF accepts a_ref feedforward; NMPC ignores it
+            if isa(outer, 'PositionControllerPDFF')
+                F_specific = outer.compute(p_NED, v_NED, p_horizon, v_horizon, a_ref);
+            else
+                F_specific = outer.compute(p_NED, v_NED, p_horizon, v_horizon);
+            end
             F_cmd_NED = ac_cfg.mass * F_specific;
         end
 
