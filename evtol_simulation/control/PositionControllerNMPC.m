@@ -1,38 +1,41 @@
 classdef PositionControllerNMPC < handle
-% POSITIONCONTROLLERNMPC  Nonlinear MPC for outer position/velocity loop.
+% POSITIONCONTROLLERNMPC  Nonlinear MPC for outer position/velocity loop with
+%                         offset-free disturbance observer.
 %
-% Decision variable: sequence of body-frame specific-force commands a_cmd[k]
-% over horizon N. Predictive model is point-mass under gravity:
+% Decision variable: sequence of NED-frame specific-force commands f_cmd[k]
+% over horizon N. Predictive model (offset-free):
 %
 %   p[k+1] = p[k] + dt * v[k]
-%   v[k+1] = v[k] + dt * (R(q_des[k]) * a_cmd[k] + g_NED)
+%   v[k+1] = v[k] + dt * (f_cmd[k] + d_hat + g_NED)
 %
-% where the desired thrust vector points from current state toward reference
-% trajectory. Actually we work directly with NED-frame specific-force vector
-% f_cmd, decoupling outer optimization from attitude:
+% where d_hat is an integral disturbance estimate that captures unmodeled
+% forces (aerodynamic drag, lift, slipstream download, wind, etc.). This is
+% the standard "offset-free MPC" technique (Pannocchia & Rawlings 2003,
+% Maeder & Morari 2010) — without it the controller commands trim assuming
+% f = -g_NED but reality has f_real = -g_NED + d_real, producing a steady
+% drift that the cascade saturates trying to compensate.
 %
-%   v[k+1] = v[k] + dt * (f_cmd[k] + g_NED)
+% Disturbance observer (closed-loop, anti-windup):
+%   v_pred[k+1] = v[k] + dt * (f_cmd_applied[k] + d_hat[k] + g_NED)
+%   error_v = v_actual[k+1] - v_pred[k+1]              (one-step prediction err)
+%   d_hat[k+1] = d_hat[k] + k_obs * (error_v / dt)     (slow integration)
+%   d_hat saturated to +/- d_max
+%   Conditional integration: only update d_hat when actuator NOT saturated
+%   in same direction (anti-windup).
 %
-% Cost:
-%   J = sum_k ( (p-p_ref)' Qp (p-p_ref) + (v-v_ref)' Qv (v-v_ref) + f' R f )
-%       + e_N' Qf e_N
-%
-% Constraints:
-%   |f_cmd[k]| <= a_max
-%   tilt of f_cmd[k] from -Z_NED <= tilt_max  (only enforced once descent is needed)
-%
-% Outputs to inner loop:
-%   F_cmd_NED (first step f_cmd[0]) -> converted to (T_total, qd) by mapper.
-% This separation is the clean cascade GNC pattern.
+% Cost: same as before, J = pos_err + vel_err + control effort.
 
     properties
         cfg
         last_solution = [];
         m_total
-        % Disturbance estimator: integral of position error gives steady-state
-        % offset compensation for unmodeled forces (aero drag, slipstream, wind).
+        % --- Disturbance observer state ---
         d_hat = zeros(3,1);     % NED-frame disturbance specific-force estimate
-        d_max = 2.0;             % anti-windup limit [m/s^2] (vertical envelope)
+        d_max = 5.0;             % saturation [m/s^2]
+        prev_v = [];             % velocity at previous outer-loop call
+        prev_f_cmd = [];         % f_cmd commanded at previous call
+        prev_t = NaN;            % time of previous call
+        k_obs = 0.15;            % observer gain (slow integration)
     end
 
     methods
@@ -44,23 +47,35 @@ classdef PositionControllerNMPC < handle
         function reset(obj)
             obj.last_solution = [];
             obj.d_hat = zeros(3,1);
+            obj.prev_v = [];
+            obj.prev_f_cmd = [];
+            obj.prev_t = NaN;
         end
 
         function f_cmd = compute(obj, p, v, p_ref_traj, v_ref_traj)
             % p_ref_traj, v_ref_traj: 3 x (N+1) reference horizon
             N  = obj.cfg.nmpc.N;
             dt = obj.cfg.nmpc.dt;
+            dt_outer = 1 / obj.cfg.f_outer;
 
-            % --- Disturbance update (DISABLED) ---
-            % Theoretical analysis shows NMPC alone (Qp=10, R=0.05) holds hover
-            % within ~9 mm of reference under 0.13 m/s^2 aero disturbance, since
-            % effective P-gain = sqrt(Qp/R) = 14. Adding integral d_hat caused
-            % windup-driven divergence (saturation at d_max -> oscillation amplifies).
-            % Keeping the field for backward compatibility but with k_d=0.
-            err_p = p_ref_traj(:,1) - p;
-            k_d = 0.0;
-            obj.d_hat = obj.d_hat + k_d * err_p * (1/obj.cfg.f_outer);
-            obj.d_hat = max(-obj.d_max, min(obj.d_max, obj.d_hat));
+            % --- Disturbance observer update ---
+            % Compare actual velocity with one-step prediction from prev call
+            if ~isempty(obj.prev_v) && ~isempty(obj.prev_f_cmd)
+                v_pred = obj.prev_v + dt_outer * (obj.prev_f_cmd + obj.d_hat + [0;0;9.80665]);
+                err_v = v - v_pred;
+                % Integral update with conditional anti-windup:
+                % don't increase |d_hat| if it's already saturated in same direction
+                update = obj.k_obs * err_v;
+                for ax = 1:3
+                    if abs(obj.d_hat(ax)) >= obj.d_max
+                        if sign(update(ax)) == sign(obj.d_hat(ax))
+                            update(ax) = 0;   % saturated, don't push further
+                        end
+                    end
+                end
+                obj.d_hat = obj.d_hat + update;
+                obj.d_hat = max(-obj.d_max, min(obj.d_max, obj.d_hat));
+            end
 
             % Warm start
             if isempty(obj.last_solution)
@@ -85,24 +100,28 @@ classdef PositionControllerNMPC < handle
             end
 
             obj.last_solution = u_opt;
-            % Apply disturbance compensation outside the optimization horizon
-            % (treated as a known additive offset in the actuator).
-            f_cmd = u_opt(1:3) + obj.d_hat;
+            % f_cmd is the actuator command. d_hat is in the predictor (not added).
+            f_cmd = u_opt(1:3);
 
-            % Saturate combined command at a_max
+            % Saturate at a_max (safety)
             mag = norm(f_cmd);
             if mag > a_max
                 f_cmd = f_cmd * (a_max / mag);
             end
+
+            % Save state for next call's observer update
+            obj.prev_v = v;
+            obj.prev_f_cmd = f_cmd;
         end
 
         function J = cost_and_dynamics(obj, u, p, v, pr, vr, N, dt)
-            % Single-shooting cost evaluation
+            % Single-shooting cost evaluation with offset-free predictor.
+            % d_hat is included so the planner accounts for unmodeled forces.
             J = 0;
             g_NED = [0;0;9.80665];
             for k = 1:N
                 fk = u(3*(k-1)+1 : 3*k);
-                v_next = v + dt * (fk + g_NED);
+                v_next = v + dt * (fk + obj.d_hat + g_NED);
                 p_next = p + dt * v;
 
                 ep = p_next - pr(:, k+1);
