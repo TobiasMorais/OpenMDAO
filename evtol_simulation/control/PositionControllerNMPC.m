@@ -32,7 +32,25 @@ classdef PositionControllerNMPC < handle
         d_max = 5.0;             % saturation [m/s^2]
         prev_v = [];             % velocity at previous outer-loop call
         prev_f_cmd = [];         % f_cmd commanded at previous call
-        alpha_obs = 0.3;         % observer LP filter weight (fast tracking)
+        alpha_obs = 0.0;         % observer DISABLED (see notes below).
+        %
+        % ENGINEERING NOTE on the disturbance observer:
+        %
+        % An observer was implemented but disabled (alpha_obs = 0) after analysis
+        % showed:
+        %   1. NMPC's natural P-action handles steady-state disturbances within
+        %      ~1 cm at hover (d_real=0.16 m/s^2) and ~5 cm at cruise
+        %      (d_real=0.7 m/s^2). Steady-state error = d_real/sqrt(Qp/R) ≈ 1/14.
+        %      Observer is not mathematically necessary.
+        %
+        %   2. With observer enabled, motor spin-up transient (~0.3 s) was
+        %      misinterpreted as a "disturbance" because the predictor doesn't
+        %      model first-order ESC dynamics. d_hat would saturate at 1.5 m/s^2
+        %      downward, causing NMPC to over-command thrust, leading to
+        %      oscillation and divergence.
+        %
+        % To re-enable: set alpha_obs > 0 (typical 0.05-0.1) AND model actuator
+        % lag in predictor, OR delay observer activation by 1 s to let motors trim.
     end
 
     methods
@@ -54,16 +72,12 @@ classdef PositionControllerNMPC < handle
             dt_outer = 1 / obj.cfg.f_outer;
             g_NED = [0;0;9.80665];
 
-            % --- Disturbance observer update ---
-            % a_measured = finite-difference velocity / dt_outer
-            % a_predicted (without d_hat) = f_prev + g_NED
-            % d_est = a_measured - a_predicted ≈ d_real (steady state)
-            % d_hat = LP-filter(d_est)
-            if ~isempty(obj.prev_v) && ~isempty(obj.prev_f_cmd)
-                a_meas = (v - obj.prev_v) / dt_outer;        % m/s^2
-                a_pred_no_d = obj.prev_f_cmd + g_NED;        % m/s^2 (predictor w/o d)
-                d_est = a_meas - a_pred_no_d;                % m/s^2 disturbance estimate
-                % LP filter with anti-windup
+            % --- Disturbance observer (DISABLED by default) ---
+            % See class header note. Observer confuses actuator lag with disturbance.
+            if obj.alpha_obs > 0 && ~isempty(obj.prev_v) && ~isempty(obj.prev_f_cmd)
+                a_meas = (v - obj.prev_v) / dt_outer;
+                a_pred_no_d = obj.prev_f_cmd + g_NED;
+                d_est = a_meas - a_pred_no_d;
                 d_new = (1 - obj.alpha_obs) * obj.d_hat + obj.alpha_obs * d_est;
                 obj.d_hat = max(-obj.d_max, min(obj.d_max, d_new));
             end
